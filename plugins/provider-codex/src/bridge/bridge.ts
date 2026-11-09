@@ -496,6 +496,7 @@ interface CodexBridgeSession {
   previousChildExit: Promise<void> | null;
   releasePromise: Promise<void> | null;
   goalStatus: CodexGoalStatus | null;
+  deliveredInstructions?: string | undefined;
 }
 
 const sessionsByBbThreadId = new Map<string, CodexBridgeSession>();
@@ -1405,6 +1406,9 @@ async function constructThreadSession(
     );
     const codexThreadId = result.thread.id;
     session.codexThreadId = codexThreadId;
+    if (args.request.kind === "start") {
+      session.deliveredInstructions = decoded.sessionOptions.instructions;
+    }
     translator.activateThreadGitWritableRoots({
       providerThreadId: codexThreadId,
       threadId: args.threadId,
@@ -2084,19 +2088,32 @@ async function handleTurnStart(
       );
       const previousPermissions = session.turnPermissionSettings;
       session.turnPermissionSettings = permissionSettings;
+      const turnStartParams: Record<string, unknown> = {
+        threadId: codexThreadId,
+        input: await resolveCodexSkillInput(session, input),
+        approvalPolicy: permissionSettings.approvalPolicy,
+        approvalsReviewer: permissionSettings.approvalsReviewer,
+        sandboxPolicy: permissionSettings.sandboxPolicy,
+        model: decoded.sessionOptions.model ?? undefined,
+        serviceTier: toCodexServiceTier(decoded.sessionOptions.serviceTier),
+        ...(cyberAccessProgram === null ? {} : { cyberAccessProgram }),
+      };
+      const instructions = decoded.sessionOptions.instructions;
+      if (
+        instructions !== undefined &&
+        instructions !== session.deliveredInstructions
+      ) {
+        turnStartParams.additionalContext = {
+          "bb-instructions": {
+            kind: "application",
+            value: instructions,
+          },
+        };
+      }
       result = await connection
         .request({
           method: "turn/start",
-          params: {
-            threadId: codexThreadId,
-            input: await resolveCodexSkillInput(session, input),
-            approvalPolicy: permissionSettings.approvalPolicy,
-            approvalsReviewer: permissionSettings.approvalsReviewer,
-            sandboxPolicy: permissionSettings.sandboxPolicy,
-            model: decoded.sessionOptions.model ?? undefined,
-            serviceTier: toCodexServiceTier(decoded.sessionOptions.serviceTier),
-            ...(cyberAccessProgram === null ? {} : { cyberAccessProgram }),
-          },
+          params: turnStartParams,
           resultSchema: ignoredChildResultSchema,
         })
         .catch((error: unknown) => {
@@ -2105,6 +2122,7 @@ async function handleTurnStart(
           }
           throw error;
         });
+      session.deliveredInstructions = instructions;
     }
     sendResult(id, { threadId: params.threadId });
     settleAcceptedDispatch({

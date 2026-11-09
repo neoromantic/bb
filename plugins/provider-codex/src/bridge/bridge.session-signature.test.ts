@@ -143,6 +143,89 @@ it("rebuilds the session only when a turn changes or removes an env var", async 
   ]);
 }, 30_000);
 
+it("sends changed instructions as additionalContext until a turn/start accepts them", async () => {
+  harness.sendRequest(1, "thread/start", {
+    threadId: THREAD_ID,
+    cwd: workspaceDir,
+    instructionMode: "append",
+    options: { ...FULL_ACCESS_SESSION_OPTIONS, instructions: "marker A" },
+  });
+  const started = await harness.waitForResponse(1);
+  const { providerThreadId } = z
+    .object({ providerThreadId: z.string() })
+    .parse(started.result);
+
+  const turns = [
+    { instructions: "marker A", text: "say hello" },
+    { instructions: "marker B", text: "/fail-turn-start" },
+    { instructions: "marker B", text: "say hello" },
+    { instructions: "marker B", text: "say hello" },
+  ];
+  for (const [index, turn] of turns.entries()) {
+    const id = index + 2;
+    harness.sendRequest(id, "turn/start", {
+      threadId: THREAD_ID,
+      providerThreadId,
+      clientRequestId: `creq_instrctxx${id}`,
+      input: [{ type: "text", text: turn.text, mentions: [] }],
+      options: {
+        ...FULL_ACCESS_SESSION_OPTIONS,
+        instructions: turn.instructions,
+      },
+    });
+    await harness.waitForResponse(id);
+  }
+
+  const markerB = {
+    "bb-instructions": { kind: "application", value: "marker B" },
+  };
+  expect(
+    recordedRequests()
+      .filter((request) => request.method === "turn/start")
+      .map((request) => request.params.additionalContext),
+  ).toEqual([undefined, markerB, markerB, undefined]);
+  expect(
+    recordedRequests()
+      .filter((request) => request.method === "turn/start")
+      .map((request) => "additionalContext" in request.params),
+  ).toEqual([false, true, true, false]);
+  expect(
+    harness.messages.filter((message) => message.method === "session/replaced"),
+  ).toEqual([]);
+}, 30_000);
+
+it("sends the instructions on the first turn after a resume", async () => {
+  harness.sendRequest(1, "thread/resume", {
+    threadId: THREAD_ID,
+    providerThreadId: "instructions-resume",
+    cwd: workspaceDir,
+    instructionMode: "append",
+    options: { ...FULL_ACCESS_SESSION_OPTIONS, instructions: "marker B" },
+  });
+  expect((await harness.waitForResponse(1)).error).toBeUndefined();
+
+  for (const id of [2, 3]) {
+    harness.sendRequest(id, "turn/start", {
+      threadId: THREAD_ID,
+      providerThreadId: "instructions-resume",
+      clientRequestId: `creq_instrctxx${id}`,
+      input: [{ type: "text", text: "say hello", mentions: [] }],
+      options: { ...FULL_ACCESS_SESSION_OPTIONS, instructions: "marker B" },
+    });
+    expect((await harness.waitForResponse(id)).error).toBeUndefined();
+  }
+
+  expect(
+    recordedRequests()
+      .filter((request) => request.method === "turn/start")
+      .map((request) => "additionalContext" in request.params),
+  ).toEqual([true, false]);
+  expect(
+    recordedRequests().find((request) => request.method === "turn/start")
+      ?.params.additionalContext,
+  ).toEqual({ "bb-instructions": { kind: "application", value: "marker B" } });
+}, 30_000);
+
 it("keeps an auto-reviewed session when only escalation intent changes", async () => {
   harness.sendRequest(1, "thread/start", {
     threadId: THREAD_ID,

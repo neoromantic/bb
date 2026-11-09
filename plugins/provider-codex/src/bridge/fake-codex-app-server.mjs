@@ -58,6 +58,7 @@ const INTERRUPT_BEFORE_START_PROMPT_TEXT = "/interrupt-before-start";
 const INTERRUPTIBLE_PROMPT_TEXT = "/wait-for-interrupt";
 
 const SUBAGENT_THEN_CRASH_PROMPT_TEXT = "/subagent-then-crash";
+const FAIL_TURN_START_PROMPT_TEXT = "/fail-turn-start";
 
 function firstInputText(input) {
   const first = Array.isArray(input) ? input[0] : undefined;
@@ -583,6 +584,10 @@ async function handleRequest(message) {
       return;
     }
     case "turn/start": {
+      if (firstInputText(params.input) === FAIL_TURN_START_PROMPT_TEXT) {
+        respondError(id, -32603, "turn/start rejected");
+        return;
+      }
       if (firstInputText(params.input) === ZERO_WORK_PROMPT_TEXT) {
         respond(id, {});
         return;
